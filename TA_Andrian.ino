@@ -1,7 +1,8 @@
 /*************************************************************
  * @file        : TA_Andrian.ino
  * @brief       : UNO
- * @revision    : 0-0   
+ * @revision    : 0.0.0
+ * @environment : Arduino 1.8.13
  * **********************************************************/
 
 /************************ Includes **************************/
@@ -12,18 +13,26 @@
 #include <DallasTemperature.h>      // Install library DallasTemperature    version 3.9.0
 
 /************************ Defines  **************************/
-#define PZEM_INPUT_TX_PIN   2
-#define PZEM_INPUT_RX_PIN   3
+#define PZEM_INPUT_TX_PIN   3
+#define PZEM_INPUT_RX_PIN   2
 
-#define PZEM_OUTPUT_TX_PIN  5
+#define PZEM_OUTPUT_TX_PIN  7
 #define PZEM_OUTPUT_RX_PIN  6
 
-#define SUHU_DATA_PIN       4
+#define SUHU_DATA_PIN       5
 
-#define RELAY_1_PIN         7
-#define RELAY_2_PIN         8
-#define RELAY_3_PIN         9
+#define RELAY_1_PIN         13
+#define RELAY_2_PIN         12
+#define RELAY_3_PIN         11
 #define RELAY_4_PIN         10
+
+#define RELAY_SUMBER        RELAY_4_PIN
+#define RELAY_PROTEKSI      RELAY_1_PIN
+#define RELAY_SUHU          RELAY_2_PIN
+#define RELAY_FAN           RELAY_3_PIN
+
+#define RELAY_ON            LOW
+#define RELAY_OFF           HIGH
 
 /************************ Macros ***************************/
 SoftwareSerial serialPzemInput(PZEM_INPUT_RX_PIN, PZEM_INPUT_TX_PIN);
@@ -43,22 +52,28 @@ typedef struct{
     float energy;
     float frequency;
     float pf;
-}PzemData;
+}PzemData_Struct;
 
 typedef struct{
     float suhu;
-    PzemData input;
-    PzemData output;
-}SensorData;
+    PzemData_Struct input;
+    PzemData_Struct output;
+}SensorData_Struct;
 
 /*********************** Variables **************************/
-SensorData sensorData;
+SensorData_Struct sensorData;
 
 /************************  Setup  ***************************/
 void setup(){
     Serial.begin(9600);
-
+    
     sensorSuhu.begin();
+
+    relayInit();
+    setSumber(true);                // true = sumber PLN, false = sumber PLTPH
+    setProteksi(false);             // true = proteksi ON, false = proteksi OFF
+    setFan(false);                  // true = FAN ON, false = FAN OFF
+
 }
 
 /************************   Loop   **************************/
@@ -81,7 +96,7 @@ void loop(){
 }
 
 bool readPzemInput(){
-    PzemData pzem;
+    PzemData_Struct pzem;
     bool valid = false;
     
     pzem.voltage    = pzemInput.voltage();
@@ -125,7 +140,7 @@ bool readPzemInput(){
 }
 
 bool readPzemOutput(){
-    PzemData pzem;
+    PzemData_Struct pzem;
     bool valid = false;
     
     pzem.voltage    = pzemOutput.voltage();
@@ -175,4 +190,26 @@ void readSuhu(){
     Serial.println("--------------- SUHU --------------");
     Serial.print("Suhu : ");        Serial.print(sensorData.suhu, 2);    Serial.println(" C");
     Serial.println();
+}
+
+void relayInit(){
+    pinMode(RELAY_1_PIN, OUTPUT);       digitalWrite(RELAY_1_PIN, RELAY_OFF);
+    pinMode(RELAY_2_PIN, OUTPUT);       digitalWrite(RELAY_2_PIN, RELAY_OFF);
+    pinMode(RELAY_3_PIN, OUTPUT);       digitalWrite(RELAY_3_PIN, RELAY_OFF);
+    pinMode(RELAY_4_PIN, OUTPUT);       digitalWrite(RELAY_4_PIN, RELAY_OFF);
+}
+
+void setSumber(bool pln){
+    if(pln){    digitalWrite(RELAY_SUMBER, RELAY_OFF);  }   // jika true, Matikan Relay Sumber untuk menggunakan sumber PLN ke LOAD
+    else{       digitalWrite(RELAY_SUMBER, RELAY_ON);   }   // jika false, Nyalakn RElay Sumber untuk menggunakan sumber PLTPH ke LOAD
+}
+
+void setProteksi(bool protek){
+    if(protek){ digitalWrite(RELAY_PROTEKSI, RELAY_ON); }   // jika true, Nyalakan Relay Proteksi untuk memutus LOAD
+    else{       digitalWrite(RELAY_PROTEKSI, RELAY_OFF);}   // jika false, Matikan Relay Proteksi untuk menyambungkan LOAD
+}
+
+void setFan(bool on){
+    if(on){ digitalWrite(RELAY_FAN, RELAY_ON);  }       // jika true, nyalakan FAN
+    else{   digitalWrite(RELAY_FAN, RELAY_OFF); }       // jika false, matikan FAN
 }
