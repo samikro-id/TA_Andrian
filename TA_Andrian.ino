@@ -13,6 +13,9 @@
 #include <DallasTemperature.h>      // Install library DallasTemperature    version 3.9.0
 
 /************************ Defines  **************************/
+#define SERIAL_SPEED        9600
+#define SERIAL_LEN          400
+
 #define PZEM_INPUT_TX_PIN   3
 #define PZEM_INPUT_RX_PIN   2
 
@@ -33,6 +36,10 @@
 
 #define RELAY_ON            LOW
 #define RELAY_OFF           HIGH
+
+#define UPDATE_SENSOR_TIME  1000
+
+#define SUHU_HIGH           40
 
 /************************ Macros ***************************/
 SoftwareSerial serialPzemInput(PZEM_INPUT_RX_PIN, PZEM_INPUT_TX_PIN);
@@ -61,12 +68,21 @@ typedef struct{
 }SensorData_Struct;
 
 /*********************** Variables **************************/
+String serial_buff;
+bool serial_complete        = false;
+
 SensorData_Struct sensorData;
+
+uint32_t led_time;
+uint32_t sensor_time;
 
 /************************  Setup  ***************************/
 void setup(){
-    Serial.begin(9600);
-    
+    delay(300);
+
+    Serial.begin(SERIAL_SPEED);
+    serial_buff.reserve(SERIAL_LEN);
+
     sensorSuhu.begin();
 
     relayInit();
@@ -74,25 +90,70 @@ void setup(){
     setProteksi(false);             // true = proteksi ON, false = proteksi OFF
     setFan(false);                  // true = FAN ON, false = FAN OFF
 
+    led_time = millis();
+    sensor_time = millis();
+
 }
 
 /************************   Loop   **************************/
 void loop(){
-    if(readPzemInput()){
-        
-    }else{
-        
+    if((millis() - led_time) > 200){
+        led_time = millis();
     }
 
-    if(readPzemOutput()){
+    if((millis() - sensor_time) > UPDATE_SENSOR_TIME){
+        sensor_time = millis();
         
-    }else{
+        readPzemInput();
+        readPzemOutput();
 
+        readSuhu();
+
+        if(sensorData.suhu > SUHU_HIGH){    setSuhuRelay(true); }
+        else{                               setSuhuRelay(false);}
     }
 
-    readSuhu();
+    if(serial_complete){
+        prosesData();
 
-    delay(2000);
+        serial_complete = false;
+    }
+}
+
+void prosesData(){
+    StaticJsonBuffer<SERIAL_LEN> JSONBuffer;
+
+    JsonObject& root = JSONBuffer.parseObject(serial_buff);
+    if(root.success()){
+        const char * op = root["op"];
+
+        if(strcmp(op, "data") == 0){
+            const char * cmd = root["cmd"];
+
+            if(strcmp(cmd, "get") == 0){
+                serial_buff = "";
+                serial_buff = "data|" + String(sensorData.suhu, 0)
+                            + "|" + String(sensorData.input.voltage, 1) 
+                            + "|" + String(sensorData.input.current, 3)
+                            + "|" + String(sensorData.input.power)
+                            + "|" + String(sensorData.input.frequency)
+                            + "|" + String(sensorData.input.pf, 3)
+                            + "|" + String(sensorData.input.energy)
+
+                            + "|" + String(sensorData.output.voltage, 1) 
+                            + "|" + String(sensorData.output.current, 3)
+                            + "|" + String(sensorData.output.power)
+                            + "|" + String(sensorData.output.frequency)
+                            + "|" + String(sensorData.output.pf, 3)
+                            + "|" + String(sensorData.output.energy)
+                            ;
+
+                Serial.print(serial_buff);
+            }
+        }
+    }
+
+    serial_buff = "";
 }
 
 bool readPzemInput(){
@@ -123,18 +184,18 @@ bool readPzemInput(){
         valid = true;
     }
 
-    if(valid){
-        Serial.println("------------ INPUT -----------");
-        Serial.print(sensorData.input.voltage, 2);      Serial.println("V");
-        Serial.print(sensorData.input.current, 3);      Serial.println("A");
-        Serial.print(sensorData.input.power, 2);        Serial.println("W");
-        Serial.print(sensorData.input.energy, 2);       Serial.println("Wh");
-        Serial.print(sensorData.input.frequency, 2);    Serial.println("Hz");
-        Serial.print("PF : ");                          Serial.println(sensorData.input.pf, 3);
-    }else{
-        Serial.println("-- READ INPUT FAILED --");
-    }
-    Serial.println();
+    // if(valid){
+    //     Serial.println("------------ INPUT -----------");
+    //     Serial.print(sensorData.input.voltage, 2);      Serial.println("V");
+    //     Serial.print(sensorData.input.current, 3);      Serial.println("A");
+    //     Serial.print(sensorData.input.power, 2);        Serial.println("W");
+    //     Serial.print(sensorData.input.energy, 2);       Serial.println("Wh");
+    //     Serial.print(sensorData.input.frequency, 2);    Serial.println("Hz");
+    //     Serial.print("PF : ");                          Serial.println(sensorData.input.pf, 3);
+    // }else{
+    //     Serial.println("-- READ INPUT FAILED --");
+    // }
+    // Serial.println();
 
     return valid;
 }
@@ -167,18 +228,18 @@ bool readPzemOutput(){
         valid = true;
     }
 
-    if(valid){
-        Serial.println("------------ OUTPUT -----------");
-        Serial.print(sensorData.output.voltage, 2);     Serial.println("V");
-        Serial.print(sensorData.output.current, 3);     Serial.println("A");
-        Serial.print(sensorData.output.power, 2);       Serial.println("W");
-        Serial.print(sensorData.output.energy, 2);      Serial.println("Wh");
-        Serial.print(sensorData.output.frequency, 2);   Serial.println("Hz");
-        Serial.print("PF : ");                          Serial.println(sensorData.output.pf, 3);
-    }else{
-        Serial.println("-- READ OUTPUT FAILED --");
-    }
-    Serial.println();
+    // if(valid){
+    //     Serial.println("------------ OUTPUT -----------");
+    //     Serial.print(sensorData.output.voltage, 2);     Serial.println("V");
+    //     Serial.print(sensorData.output.current, 3);     Serial.println("A");
+    //     Serial.print(sensorData.output.power, 2);       Serial.println("W");
+    //     Serial.print(sensorData.output.energy, 2);      Serial.println("Wh");
+    //     Serial.print(sensorData.output.frequency, 2);   Serial.println("Hz");
+    //     Serial.print("PF : ");                          Serial.println(sensorData.output.pf, 3);
+    // }else{
+    //     Serial.println("-- READ OUTPUT FAILED --");
+    // }
+    // Serial.println();
 
     return valid;
 }
@@ -187,9 +248,9 @@ void readSuhu(){
     sensorSuhu.requestTemperatures();
     sensorData.suhu = sensorSuhu.getTempCByIndex(0);
 
-    Serial.println("--------------- SUHU --------------");
-    Serial.print("Suhu : ");        Serial.print(sensorData.suhu, 2);    Serial.println(" C");
-    Serial.println();
+    // Serial.println("--------------- SUHU --------------");
+    // Serial.print("Suhu : ");        Serial.print(sensorData.suhu, 2);    Serial.println(" C");
+    // Serial.println();
 }
 
 void relayInit(){
@@ -212,4 +273,25 @@ void setProteksi(bool protek){
 void setFan(bool on){
     if(on){ digitalWrite(RELAY_FAN, RELAY_ON);  }       // jika true, nyalakan FAN
     else{   digitalWrite(RELAY_FAN, RELAY_OFF); }       // jika false, matikan FAN
+}
+
+void setSuhuRelay(bool on){
+    if(on){ digitalWrite(RELAY_SUHU, RELAY_ON);  }       // jika true, nyalakan RELAY SUHU
+    else{   digitalWrite(RELAY_SUHU, RELAY_OFF); }       // jika false, matikan RELAY SUHU
+}
+
+/******* Serial Interrupt Event Callback ********/
+void serialEvent(){
+  while(Serial.available()){
+    char inChar = (char) Serial.read();
+    if(inChar == '\n'){
+      serial_complete = true;
+    }else if(inChar == '\r'){
+      // do nothing
+    }else{
+      if(!serial_complete){
+        serial_buff += inChar;
+      }
+    }
+  }
 }
