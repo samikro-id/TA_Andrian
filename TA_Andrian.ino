@@ -41,7 +41,7 @@
 
 #define SUHU_HIGH           40
 
-/************************ Macros ***************************/
+/************************ Macros ****************************/
 SoftwareSerial serialPzemInput(PZEM_INPUT_RX_PIN, PZEM_INPUT_TX_PIN);
 SoftwareSerial serialPzemOutput(PZEM_OUTPUT_RX_PIN, PZEM_OUTPUT_TX_PIN);
 
@@ -53,12 +53,12 @@ DallasTemperature sensorSuhu(&oneWire);
 
 /************************ Structs ***************************/
 typedef struct{
-    float voltage;
-    float current;
-    float power;
-    float energy;
-    float frequency;
-    float pf;
+    float voltage = 0.0;
+    float current = 0.0;
+    float power = 0.0;
+    float energy = 0.0;
+    float frequency = 0.0;
+    float pf = 0.0;
 }PzemData_Struct;
 
 typedef struct{
@@ -76,6 +76,11 @@ SensorData_Struct sensorData;
 uint32_t led_time;
 uint32_t sensor_time;
 
+bool source_pln;
+bool proteksi_on;
+bool fan_on;
+bool relay_suhu_on;
+
 /************************  Setup  ***************************/
 void setup(){
     delay(300);
@@ -89,6 +94,7 @@ void setup(){
     setSumber(true);                // true = sumber PLN, false = sumber PLTPH
     setProteksi(false);             // true = proteksi ON, false = proteksi OFF
     setFan(false);                  // true = FAN ON, false = FAN OFF
+    setRelaySuhu(false);            // 
 
     led_time = millis();
     sensor_time = millis();
@@ -109,8 +115,8 @@ void loop(){
 
         readSuhu();
 
-        if(sensorData.suhu > SUHU_HIGH){    setSuhuRelay(true); }
-        else{                               setSuhuRelay(false);}
+        if(sensorData.suhu > SUHU_HIGH){    setRelaySuhu(true); }
+        else{                               setRelaySuhu(false);}
     }
 
     if(serial_complete){
@@ -121,35 +127,55 @@ void loop(){
 }
 
 void prosesData(){
-    StaticJsonBuffer<SERIAL_LEN> JSONBuffer;
+    int index, index2, index3;
 
-    JsonObject& root = JSONBuffer.parseObject(serial_buff);
-    if(root.success()){
-        const char * op = root["op"];
+    index = serial_buff.indexOf("|");
 
-        if(strcmp(op, "data") == 0){
-            const char * cmd = root["cmd"];
+    if(serial_buff.substring(0, index) == "GET"){
+        index++;
+        if(serial_buff.substring(index) == "DATA"){
+            serial_buff = "";
+            serial_buff = "DATA|" + String(sensorData.suhu, 0)
+                        + "|" + String(sensorData.input.voltage, 1) 
+                        + "|" + String(sensorData.input.current, 3)
+                        + "|" + String(sensorData.input.power)
+                        + "|" + String(sensorData.input.frequency)
+                        + "|" + String(sensorData.input.pf, 3)
+                        + "|" + String(sensorData.input.energy)
 
-            if(strcmp(cmd, "get") == 0){
-                serial_buff = "";
-                serial_buff = "data|" + String(sensorData.suhu, 0)
-                            + "|" + String(sensorData.input.voltage, 1) 
-                            + "|" + String(sensorData.input.current, 3)
-                            + "|" + String(sensorData.input.power)
-                            + "|" + String(sensorData.input.frequency)
-                            + "|" + String(sensorData.input.pf, 3)
-                            + "|" + String(sensorData.input.energy)
+                        + "|" + String(sensorData.output.voltage, 1) 
+                        + "|" + String(sensorData.output.current, 3)
+                        + "|" + String(sensorData.output.power)
+                        + "|" + String(sensorData.output.frequency)
+                        + "|" + String(sensorData.output.pf, 3)
+                        + "|" + String(sensorData.output.energy)
+                        + "|" + String(source_pln)
+                        + "|" + String(proteksi_on)
+                        + "|" + String(fan_on)
+                        + "|" + String(relay_suhu_on)
+                        ;
 
-                            + "|" + String(sensorData.output.voltage, 1) 
-                            + "|" + String(sensorData.output.current, 3)
-                            + "|" + String(sensorData.output.power)
-                            + "|" + String(sensorData.output.frequency)
-                            + "|" + String(sensorData.output.pf, 3)
-                            + "|" + String(sensorData.output.energy)
-                            ;
+            Serial.println(serial_buff);
+        }
+        else{
 
-                Serial.print(serial_buff);
+        }
+    }
+    else if(serial_buff.substring(0, index) == "SET"){
+        index++;
+        index2 = serial_buff.indexOf("|", index);
+
+        if(serial_buff.substring(index, index2) == "SOURCE"){
+            index2++;
+            if(serial_buff.substring(index2) == "PLN"){
+                setSumber(true);
+
+                Serial.println(serial_buff.substring(index));
             }
+            else if(serial_buff.substring(index2) == "PLTPH"){
+                setSumber(false);
+                Serial.println(serial_buff.substring(index));
+            }          
         }
     }
 
@@ -261,23 +287,47 @@ void relayInit(){
 }
 
 void setSumber(bool pln){
-    if(pln){    digitalWrite(RELAY_SUMBER, RELAY_OFF);  }   // jika true, Matikan Relay Sumber untuk menggunakan sumber PLN ke LOAD
-    else{       digitalWrite(RELAY_SUMBER, RELAY_ON);   }   // jika false, Nyalakn RElay Sumber untuk menggunakan sumber PLTPH ke LOAD
+    if(pln){                    // jika true, Matikan Relay Sumber untuk menggunakan sumber PLN ke LOAD    
+        digitalWrite(RELAY_SUMBER, RELAY_OFF);  
+        source_pln = true;
+    }   
+    else{                       // jika false, Nyalakn RElay Sumber untuk menggunakan sumber PLTPH ke LOAD      
+        digitalWrite(RELAY_SUMBER, RELAY_ON);   
+        source_pln = false;
+    }   
 }
 
 void setProteksi(bool protek){
-    if(protek){ digitalWrite(RELAY_PROTEKSI, RELAY_ON); }   // jika true, Nyalakan Relay Proteksi untuk memutus LOAD
-    else{       digitalWrite(RELAY_PROTEKSI, RELAY_OFF);}   // jika false, Matikan Relay Proteksi untuk menyambungkan LOAD
+    if(protek){                     // jika true, Nyalakan Relay Proteksi untuk memutus LOAD
+        digitalWrite(RELAY_PROTEKSI, RELAY_ON); 
+        proteksi_on = true;
+    }   
+    else{                           // jika false, Matikan Relay Proteksi untuk menyambungkan LOAD       
+        digitalWrite(RELAY_PROTEKSI, RELAY_OFF);
+        proteksi_on = false;
+    }   
 }
 
 void setFan(bool on){
-    if(on){ digitalWrite(RELAY_FAN, RELAY_ON);  }       // jika true, nyalakan FAN
-    else{   digitalWrite(RELAY_FAN, RELAY_OFF); }       // jika false, matikan FAN
+    if(on){                         // jika true, nyalakan FAN
+        digitalWrite(RELAY_FAN, RELAY_ON);  
+        fan_on = true;
+    }       
+    else{                           // jika false, matikan FAN   
+        digitalWrite(RELAY_FAN, RELAY_OFF); 
+        fan_on = false;
+    }       
 }
 
-void setSuhuRelay(bool on){
-    if(on){ digitalWrite(RELAY_SUHU, RELAY_ON);  }       // jika true, nyalakan RELAY SUHU
-    else{   digitalWrite(RELAY_SUHU, RELAY_OFF); }       // jika false, matikan RELAY SUHU
+void setRelaySuhu(bool on){
+    if(on){                         // jika true, nyalakan RELAY SUHU
+        digitalWrite(RELAY_SUHU, RELAY_ON);  
+        relay_suhu_on = true;
+    }       
+    else{                           // jika false, matikan RELAY SUHU   
+        digitalWrite(RELAY_SUHU, RELAY_OFF); 
+        relay_suhu_on = false;
+    }       
 }
 
 /******* Serial Interrupt Event Callback ********/
@@ -295,3 +345,10 @@ void serialEvent(){
     }
   }
 }
+
+/**
+ * command list
+ * -> GET|DATA
+ * -> SET|SOURCE|PLN
+ * -> SET|SOURCE|PLTPH
+ */
