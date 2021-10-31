@@ -24,7 +24,9 @@
 
 #define SUHU_DATA_PIN       5
 
-#define RELAY_1_PIN         13
+#define FAN_DATA_PIN        A4
+
+#define RELAY_1_PIN         9
 #define RELAY_2_PIN         12
 #define RELAY_3_PIN         11
 #define RELAY_4_PIN         10
@@ -32,7 +34,7 @@
 #define RELAY_SUMBER        RELAY_4_PIN
 #define RELAY_PROTEKSI      RELAY_1_PIN
 #define RELAY_SUHU          RELAY_2_PIN
-#define RELAY_FAN           RELAY_3_PIN
+#define RELAY_INDICATOR     RELAY_3_PIN
 
 #define RELAY_ON            LOW
 #define RELAY_OFF           HIGH
@@ -40,6 +42,9 @@
 #define UPDATE_SENSOR_TIME  1000
 
 #define SUHU_HIGH           40
+
+#define VOLTAGE_THRESHOLD   210
+#define CURRENT_THRESHOLD   0.5
 
 /************************ Macros ****************************/
 SoftwareSerial serialPzemInput(PZEM_INPUT_RX_PIN, PZEM_INPUT_TX_PIN);
@@ -78,8 +83,10 @@ uint32_t sensor_time;
 
 bool source_pln;
 bool proteksi_on;
-bool fan_on;
 bool relay_suhu_on;
+bool voltage_low;
+
+bool led_state;
 
 /************************  Setup  ***************************/
 void setup(){
@@ -90,10 +97,11 @@ void setup(){
 
     sensorSuhu.begin();
 
+    pinMode(LED_BUILTIN, OUTPUT);
+    pinMode(FAN_DATA_PIN, INPUT);
     relayInit();
     setSumber(true);                // true = sumber PLN, false = sumber PLTPH
     setProteksi(false);             // true = proteksi ON, false = proteksi OFF
-    setFan(false);                  // true = FAN ON, false = FAN OFF
     setRelaySuhu(false);            // 
 
     led_time = millis();
@@ -105,6 +113,8 @@ void setup(){
 void loop(){
     if((millis() - led_time) > 200){
         led_time = millis();
+
+        toggleLed();
     }
 
     if((millis() - sensor_time) > UPDATE_SENSOR_TIME){
@@ -115,14 +125,28 @@ void loop(){
 
         readSuhu();
 
-        if(sensorData.suhu > SUHU_HIGH){    setRelaySuhu(true); }
-        else{                               setRelaySuhu(false);}
+        checkProtection();
     }
 
     if(serial_complete){
         prosesData();
 
         serial_complete = false;
+    }
+}
+
+void checkProtection(){
+    if(sensorData.suhu > SUHU_HIGH){    setRelaySuhu(true); }
+    else{                               setRelaySuhu(false);}
+
+    if(sensorData.input.voltage < VOLTAGE_THRESHOLD){
+        voltage_low = true;
+    }else{
+        voltage_low = false;
+    }
+
+    if(sensorData.output.current > CURRENT_THRESHOLD){
+        setProteksi(true);
     }
 }
 
@@ -138,21 +162,22 @@ void prosesData(){
             serial_buff = "DATA|" + String(sensorData.suhu, 0)
                         + "|" + String(sensorData.input.voltage, 1) 
                         + "|" + String(sensorData.input.current, 3)
-                        + "|" + String(sensorData.input.power)
+                        + "|" + String(sensorData.input.power, 1)
                         + "|" + String(sensorData.input.frequency)
                         + "|" + String(sensorData.input.pf, 3)
-                        + "|" + String(sensorData.input.energy)
+                        + "|" + String(sensorData.input.energy, 1)
 
                         + "|" + String(sensorData.output.voltage, 1) 
                         + "|" + String(sensorData.output.current, 3)
-                        + "|" + String(sensorData.output.power)
-                        + "|" + String(sensorData.output.frequency)
+                        + "|" + String(sensorData.output.power, 1)
+                        + "|" + String(sensorData.output.frequency, 1)
                         + "|" + String(sensorData.output.pf, 3)
-                        + "|" + String(sensorData.output.energy)
+                        + "|" + String(sensorData.output.energy, 1)
                         + "|" + String(source_pln)
                         + "|" + String(proteksi_on)
-                        + "|" + String(fan_on)
+                        + "|" + String(getFan())
                         + "|" + String(relay_suhu_on)
+                        + "|" + String(voltage_low)
                         ;
 
             Serial.println(serial_buff);
@@ -177,6 +202,18 @@ void prosesData(){
                 Serial.println(serial_buff.substring(index));
             }          
         }
+        else if(serial_buff.substring(index, index2) == "PROTEC"){
+            index2++;
+            if(serial_buff.substring(index2) == "ON"){
+                setProteksi(true);
+
+                Serial.println(serial_buff.substring(index));
+            }
+            else if(serial_buff.substring(index2) == "OFF"){
+                setProteksi(false);
+                Serial.println(serial_buff.substring(index));
+            }
+        }
     }
 
     serial_buff = "";
@@ -193,12 +230,15 @@ bool readPzemInput(){
     pzem.frequency  = pzemInput.frequency();
     pzem.pf         = pzemInput.pf();
 
-    if(isnan(pzem.voltage))         valid = false;
-    else if(isnan(pzem.current))    valid = false;
-    else if(isnan(pzem.power))      valid = false;
-    else if(isnan(pzem.energy))     valid = false;
-    else if(isnan(pzem.frequency))  valid = false;
-    else if(isnan(pzem.pf))         valid = false;
+    if(isnan(pzem.voltage) || isnan(pzem.current)|| isnan(pzem.power) 
+        || isnan(pzem.energy) || isnan(pzem.frequency) || isnan(pzem.pf)){
+        sensorData.input.voltage    = 0;
+        sensorData.input.current    = 0;
+        sensorData.input.power      = 0;
+        sensorData.input.energy     = 0;
+        sensorData.input.frequency  = 0;
+        sensorData.input.pf         = 0;
+    }
     else{
         sensorData.input.voltage    = pzem.voltage;
         sensorData.input.current    = pzem.current;
@@ -237,12 +277,15 @@ bool readPzemOutput(){
     pzem.frequency  = pzemOutput.frequency();
     pzem.pf         = pzemOutput.pf();
 
-    if(isnan(pzem.voltage))         valid = false;
-    else if(isnan(pzem.current))    valid = false;
-    else if(isnan(pzem.power))      valid = false;
-    else if(isnan(pzem.energy))     valid = false;
-    else if(isnan(pzem.frequency))  valid = false;
-    else if(isnan(pzem.pf))         valid = false;
+    if(isnan(pzem.voltage) || isnan(pzem.current)|| isnan(pzem.power) 
+        || isnan(pzem.energy) || isnan(pzem.frequency) || isnan(pzem.pf)){
+        sensorData.output.voltage    = 0;
+        sensorData.output.current    = 0;
+        sensorData.output.power      = 0;
+        sensorData.output.energy     = 0;
+        sensorData.output.frequency  = 0;
+        sensorData.output.pf         = 0;
+    }
     else{
         sensorData.output.voltage    = pzem.voltage;
         sensorData.output.current    = pzem.current;
@@ -288,11 +331,13 @@ void relayInit(){
 
 void setSumber(bool pln){
     if(pln){                    // jika true, Matikan Relay Sumber untuk menggunakan sumber PLN ke LOAD    
-        digitalWrite(RELAY_SUMBER, RELAY_OFF);  
+        digitalWrite(RELAY_SUMBER, RELAY_OFF);
+        digitalWrite(RELAY_INDICATOR, RELAY_OFF);
         source_pln = true;
     }   
     else{                       // jika false, Nyalakn RElay Sumber untuk menggunakan sumber PLTPH ke LOAD      
         digitalWrite(RELAY_SUMBER, RELAY_ON);   
+        digitalWrite(RELAY_INDICATOR, RELAY_ON);   
         source_pln = false;
     }   
 }
@@ -308,15 +353,13 @@ void setProteksi(bool protek){
     }   
 }
 
-void setFan(bool on){
-    if(on){                         // jika true, nyalakan FAN
-        digitalWrite(RELAY_FAN, RELAY_ON);  
-        fan_on = true;
-    }       
-    else{                           // jika false, matikan FAN   
-        digitalWrite(RELAY_FAN, RELAY_OFF); 
-        fan_on = false;
-    }       
+bool getFan(){
+    if(digitalRead(FAN_DATA_PIN) == LOW){
+        return true;
+    }     
+    else{
+        return false;
+    }
 }
 
 void setRelaySuhu(bool on){
@@ -346,9 +389,21 @@ void serialEvent(){
   }
 }
 
+void toggleLed(){
+  if(led_state){
+    digitalWrite(LED_BUILTIN, LOW);
+    led_state = false;
+  }else{
+    digitalWrite(LED_BUILTIN, HIGH);
+    led_state = true;
+  }
+}
+
 /**
  * command list
  * -> GET|DATA
  * -> SET|SOURCE|PLN
  * -> SET|SOURCE|PLTPH
+ * -> SET|PROTEC|ON
+ * -> SET|PROTEC|OFF
  */
