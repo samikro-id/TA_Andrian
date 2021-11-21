@@ -25,6 +25,8 @@
 #define SUHU_DATA_PIN       5
 
 #define FAN_DATA_PIN        A4
+#define SOURCE_DATA_PIN     A5
+#define MODE_DATA_PIN       A0
 
 #define RELAY_1_PIN         9
 #define RELAY_2_PIN         12
@@ -34,10 +36,12 @@
 #define RELAY_SUMBER        RELAY_4_PIN
 #define RELAY_PROTEKSI      RELAY_1_PIN
 #define RELAY_SUHU          RELAY_2_PIN
-#define RELAY_INDICATOR     RELAY_3_PIN
+#define RELAY_FAN           RELAY_3_PIN
 
 #define RELAY_ON            LOW
 #define RELAY_OFF           HIGH
+
+#define DELAY_PLTPH_PLN     5000
 
 #define UPDATE_SENSOR_TIME  1000
 
@@ -85,9 +89,17 @@ bool source_pln;
 bool proteksi_on;
 bool relay_suhu_on;
 bool voltage_low;
-
+bool fan_on;
 bool led_state;
 
+bool mode_normal = true;
+
+static float voltage_thresh = VOLTAGE_THRESHOLD;
+static float current_thresh = CURRENT_THRESHOLD;
+
+static float suhu_thresh = SUHU_HIGH;
+
+uint32_t source_timeout = 0;
 /************************  Setup  ***************************/
 void setup(){
     delay(300);
@@ -98,7 +110,9 @@ void setup(){
     sensorSuhu.begin();
 
     pinMode(LED_BUILTIN, OUTPUT);
-    pinMode(FAN_DATA_PIN, INPUT);
+    pinMode(FAN_DATA_PIN, INPUT_PULLUP);
+    pinMode(SOURCE_DATA_PIN, INPUT_PULLUP);
+    pinMode(MODE_DATA_PIN, INPUT_PULLUP);
     relayInit();
     setSumber(true);                // true = sumber PLN, false = sumber PLTPH
     setProteksi(false);             // true = proteksi ON, false = proteksi OFF
@@ -136,16 +150,34 @@ void loop(){
 }
 
 void checkProtection(){
-    if(sensorData.suhu > SUHU_HIGH){    setRelaySuhu(true); }
+    if(digitalRead(MODE_DATA_PIN) == LOW){
+        mode_normal = false;
+
+        if(digitalRead(SOURCE_DATA_PIN) == LOW){
+            source_pln = false;
+
+            source_timeout = millis();
+        }
+        else{
+            if((millis() - source_timeout) > DELAY_PLTPH_PLN){
+                source_pln = true;
+            }
+        }
+    }
+    else{
+        mode_normal = true;
+    }
+
+    if(sensorData.suhu > suhu_thresh){    setRelaySuhu(true); }
     else{                               setRelaySuhu(false);}
 
-    if(sensorData.input.voltage < VOLTAGE_THRESHOLD){
+    if(sensorData.input.voltage < voltage_thresh){
         voltage_low = true;
     }else{
         voltage_low = false;
     }
 
-    if(sensorData.output.current > CURRENT_THRESHOLD){
+    if(sensorData.output.current > current_thresh){
         setProteksi(true);
     }
 }
@@ -177,13 +209,19 @@ void prosesData(){
                         + "|" + String(proteksi_on)
                         + "|" + String(getFan())
                         + "|" + String(relay_suhu_on)
-                        + "|" + String(voltage_low)
+                        + "|" + String(voltage_low) 
                         ;
 
             Serial.println(serial_buff);
         }
         else{
+            serial_buff = "";
+            serial_buff = "PARAM|" + String(voltage_thresh, 1)
+                        + "|" + String(current_thresh, 3)
+                        + "|" + String(suhu_thresh, 0) 
+                        ;
 
+            Serial.println(serial_buff);
         }
     }
     else if(serial_buff.substring(0, index) == "SET"){
@@ -194,13 +232,22 @@ void prosesData(){
             index2++;
             if(serial_buff.substring(index2) == "PLN"){
                 setSumber(true);
-
-                Serial.println(serial_buff.substring(index));
             }
             else if(serial_buff.substring(index2) == "PLTPH"){
                 setSumber(false);
-                Serial.println(serial_buff.substring(index));
             }          
+
+            serial_buff = "";
+            serial_buff = "SOURCE|";
+
+            if(source_pln){
+                serial_buff += "PLN";
+            }
+            else{
+                serial_buff += "PLTPH";
+            }
+
+            Serial.println(serial_buff);       
         }
         else if(serial_buff.substring(index, index2) == "PROTEC"){
             index2++;
@@ -213,6 +260,27 @@ void prosesData(){
                 setProteksi(false);
                 Serial.println(serial_buff.substring(index));
             }
+        }
+        else if(serial_buff.substring(index, index2) == "PARAM"){
+            index2++;
+            index3 = serial_buff.indexOf("|", index2);
+            voltage_thresh = serial_buff.substring(index2, index3).toFloat();
+
+            index2 = index3 + 1;
+            index3 = serial_buff.indexOf("|", index2);
+            current_thresh = serial_buff.substring(index2, index3).toFloat();
+
+            index2 = index3 + 1;
+            index3 = serial_buff.indexOf("|", index2);
+            suhu_thresh = serial_buff.substring(index2, index3).toFloat();
+
+            serial_buff = "";
+            serial_buff = "PARAM|" + String(voltage_thresh, 1)
+                        + "|" + String(current_thresh, 3)
+                        + "|" + String(suhu_thresh, 0) 
+                        ;
+
+            Serial.println(serial_buff);
         }
     }
 
@@ -330,16 +398,16 @@ void relayInit(){
 }
 
 void setSumber(bool pln){
-    if(pln){                    // jika true, Matikan Relay Sumber untuk menggunakan sumber PLN ke LOAD    
-        digitalWrite(RELAY_SUMBER, RELAY_OFF);
-        digitalWrite(RELAY_INDICATOR, RELAY_OFF);
-        source_pln = true;
-    }   
-    else{                       // jika false, Nyalakn RElay Sumber untuk menggunakan sumber PLTPH ke LOAD      
-        digitalWrite(RELAY_SUMBER, RELAY_ON);   
-        digitalWrite(RELAY_INDICATOR, RELAY_ON);   
-        source_pln = false;
-    }   
+    if(mode_normal){
+        if(pln){                    // jika true, Matikan Relay Sumber untuk menggunakan sumber PLN ke LOAD    
+            digitalWrite(RELAY_SUMBER, RELAY_OFF);
+            source_pln = true;
+        }   
+        else{                       // jika false, Nyalakn RElay Sumber untuk menggunakan sumber PLTPH ke LOAD      
+            digitalWrite(RELAY_SUMBER, RELAY_ON);      
+            source_pln = false;
+        }
+    }
 }
 
 void setProteksi(bool protek){
@@ -354,21 +422,28 @@ void setProteksi(bool protek){
 }
 
 bool getFan(){
-    if(digitalRead(FAN_DATA_PIN) == LOW){
-        return true;
-    }     
+    if(mode_normal == false){
+        if(digitalRead(FAN_DATA_PIN) == LOW){
+            return true;
+        }     
+        else{
+            return false;
+        }
+    }
     else{
-        return false;
+        return relay_suhu_on;
     }
 }
 
 void setRelaySuhu(bool on){
     if(on){                         // jika true, nyalakan RELAY SUHU
         digitalWrite(RELAY_SUHU, RELAY_ON);  
+        digitalWrite(RELAY_FAN, RELAY_ON);
         relay_suhu_on = true;
     }       
     else{                           // jika false, matikan RELAY SUHU   
         digitalWrite(RELAY_SUHU, RELAY_OFF); 
+        digitalWrite(RELAY_FAN, RELAY_OFF);
         relay_suhu_on = false;
     }       
 }
